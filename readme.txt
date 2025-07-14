@@ -153,7 +153,7 @@ Mouse support: fully implemented as expected, no right click "context" menu.
 Shared system Object:
 TUI uses the same UIApp.system API as GUI
 
-Todo: multiline textboxes, dropdowns, color support, more layout support, app border and built in exit button, use of the ascii special chars for a more graphical aspect.
+Todo: multiline textboxes, polish dropdowns.
 
 -------------------------------------------------------------------------------
 Notes:

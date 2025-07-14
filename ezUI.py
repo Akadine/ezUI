@@ -7,7 +7,7 @@ import math
 import time
 
 class ezUI:
-    VERSION = "0.0.4"
+    VERSION = "0.0.5"
     # Mode constants for GUI and TUI
     class mode:
         GUI = 0

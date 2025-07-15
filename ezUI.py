@@ -574,6 +574,7 @@ class ezUI:
             
             while self.running:
                 self.blink_timer += 1
+                
                 if self.blink_timer >= 20:
                     self.blink_timer = 0
                     self.blink_state = not self.blink_state
@@ -599,8 +600,13 @@ class ezUI:
                 
                 if self.user_loop:
                     self.user_loop(self.system(self.app), self.app.data)
-
-                self.draw_ui()
+                
+                #slow it down 
+                self.counter += 1
+                if self.counter >= 15:
+                    self.counter = 0
+                    self.draw_ui()
+                    
                 time.sleep(0.01)  # small delay to prevent CPU spinning
                 
         def _check_hover(self):
@@ -672,8 +678,7 @@ class ezUI:
                         })
 
                         # Each button sets index and hides dropdown
-                        labels = list(options.keys())
-                        for i, label in enumerate(labels):
+                        for i, (label, enabled) in enumerate(options.items()):
                             btn = ezUI.Element("button", {
                                 "text": label,
                                 "name": "{}_option_{}".format(name,i)
@@ -690,7 +695,6 @@ class ezUI:
 
                                     dropdown_name = "{}_dropdown".format(name)
                                     dropdown = system.get_element_by_name(dropdown_name)
-                                    print(dropdown_name)
                                     if dropdown:
                                         dropdown.attributes["visibility"] = "collapsed"
                                         dropdown.visibility = "collapsed"
@@ -700,8 +704,11 @@ class ezUI:
                                     print("Dropdown visibility after layout:", dropdown.visibility)
                                 return handler
                                 
-                            self.app.data.bind("{}_option_{}_handler".format(name,i), make_handler(i))
-                            btn.attributes["ezClick"] = "{}_option_{}_handler".format(name,i)
+                            print(enabled)
+                            if enabled:
+                                self.app.data.bind("{}_option_{}_handler".format(name,i), make_handler(i))
+                                btn.attributes["ezClick"] = "{}_option_{}_handler".format(name,i)
+                                
                             drop_frame.add_child(btn)
 
                             # Register and append dropdown frame

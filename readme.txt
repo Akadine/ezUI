@@ -93,6 +93,7 @@ Supported Elements:
   Tag            | Description
   ---------------|-------------------------------------------------------------
   window         | Root container (must be present)
+  frame          | Container
   label          | Static or bound label text (ezBind="(key)")
   entry          | Single-line input, bound to string
   textbox        | Multi-line input, bound via <KeyRelease>
@@ -111,7 +112,7 @@ set up data model with:
 - For dropdowns (`optionmenu`), the key must point to an object with:
     - "options": a list of strings
     - "index": the currently selected option index
-
+	
 - Checkbuttons bind to a boolean value (`True`/`False`)
 - Radiobuttons bind to a shared string, each with its own `value`
 
@@ -128,6 +129,13 @@ Named Elements:
 - Any element can include a `name="myElement"` attribute.
 - Use `system.get_element_by_name("myElement")` to access it in user_function or click handlers.
   (TUI will support the same system)
+  
+Modals
+- Create a frame element
+	- Use 'ezModal="(one of None, Clear, Opaque)"
+	- None is default, not a modal
+	- Clear shows the background elements but nothing in background is interactable
+	- Opaque hides the background elements.
 
 -------------------------------------------------------------------------------
 Part 3 - TUI Mode 
@@ -142,18 +150,17 @@ Implemented so far:
 Traversing the virual dom, fully fucntional pack layout system mirroring the TKinter GUI:
 Respects the top, left, padx, pady set. Automatically computes (x, y) coordinates for each widget in layout_map.
 
-Supports: label, entry, button, checkbutton, and radiobutton.
+Supports: label, entry, button, checkbutton, radiobutton, optionmenu, frame, canvas, and built in modals on frames.
 Reactive data for those.
 
-Keyboard support: arrow keys to change active control, enter to select or toggle  << broken for now
-typing goes into focused control, backspace support
+Keyboard support: arrow keys to change cursor in entry boxes, typing goes into focused control, backspace and insert support
 
-Mouse support: fully implemented as expected, no right click "context" menu.
+Mouse support: fully implemented as expected, no right click "context" menu. We wait for the mouse button to be released and queu the action for the next frame.
 
 Shared system Object:
 TUI uses the same UIApp.system API as GUI
 
-Todo: multiline textboxes, polish dropdowns.
+Todo: multiline textboxes.
 
 -------------------------------------------------------------------------------
 Notes:

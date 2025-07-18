@@ -7,7 +7,7 @@ import math
 import time
 
 class ezUI:
-    VERSION = "0.0.5"
+    VERSION = "0.0.6"
     # Mode constants for GUI and TUI
     class mode:
         GUI = 0
@@ -724,7 +724,7 @@ class ezUI:
                             "width": str(dropdown_width * 8),     # pixels
                             "height": str(dropdown_height * 16),  # pixels
                             "visibility": "collapsed",
-                            "ezModal": "clear",
+                            "ezModal": "opaque",
                             "border": "false",
                             "overflow": "hidden",
                             "bg": "#cccccc"
@@ -767,8 +767,6 @@ class ezUI:
                             self.dropdowns[name] = (el, drop_frame)
                             self.app.register_element(drop_frame)
                             self.app.root_element.add_child(drop_frame)
-                                
-                            #self.elements_flat.append(drop_frame)                            
                             
                 for child in el.children: 
                     make_dropdowns_recursive(child)
@@ -1095,8 +1093,9 @@ class ezUI:
                         collect_modal_subtree(c)
 
                 collect_modal_subtree(self.active_modal_element)
-
-                #self.elements_flat = [e for e in self.elements_flat if e in allowed]
+                modal_type = self.active_modal_element.attributes.get("ezModal","clear").lower()
+                if modal_type == "opaque":
+                    self.elements_flat = [e for e in self.elements_flat if e in allowed]
                 self.element_coords = [z for z in self.element_coords if z[4] in allowed]
                 self.clickable_zones = [z for z in self.clickable_zones if z[6] in allowed]
 

@@ -1,0 +1,6 @@
+0.0.6 Added drop downs. Added Modals, polished dropdowns to be a modal (faking z-index).
+0.0.5 Added full screen and custom title bar support to both GUI and TUI. Added Frames, each frame has its own ui canvas. added clipping support to the canvas to support future scrolling.
+0.0.4 Added button, checkbutton, and radiobutton support, with ezClick and databinding
+0.0.3 Added entry,label, and layout support to mirrion the GUI side. Implemented the Data binding.
+0.0.2 Added TUI class, with optional border and customizable back and fore ground colors. This draws on a master canvas.
+0.0.1 Basic structure, Element, canvas, Datamodel, App, and GUI classes. Gui fully supprts databinding and ezClick

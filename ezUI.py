@@ -236,6 +236,36 @@ class ezUI:
 
             if tag == 'window':
                 widget = parent
+                
+                # --- Modal Enforcement Begins Here ---
+                modal = None
+                for child in element.children:
+                    if child.tag.lower() == "frame" and child.attributes.get("visibility", "visible") != "collapsed":
+                        modal_type = child.attributes.get("ezModal", "None")
+                        if modal_type in ["Clear", "Opaque"]:
+                            modal = child
+                            self.active_modal_element = child
+                            break
+
+                if modal:
+                    # Destroy all existing widgets except root
+                    for el in self.app.elements.values():
+                        w = el.widget
+                        if w and w != self.full_screen_parent:
+                            w.destroy()
+                    self.app.elements = {}
+
+                    # Optional: draw gray overlay
+                    if modal.attributes.get("ezModal") == "Opaque":
+                        backdrop = tk.Frame(widget, bg="#333333")
+                        backdrop.place(x=0, y=0, relwidth=1, relheight=1)
+                        self.modal_backdrop = backdrop
+
+                    # Build modal subtree only
+                    self.build(widget, modal)
+                    return  # stop here; modal handles layout
+                else:
+                    self.active_modal_element = None
 
             elif tag == 'frame':
                 overflow = element.attributes.get("overflow", "visible").lower()
@@ -296,7 +326,7 @@ class ezUI:
                 labels = list(options.keys())
                 selected_index = dropdown_data.get("selected_index", 0)
                 var.set(labels[selected_index] if labels else '')
-
+                
                 def on_select(value, key=key, var=var):
                     obj = self.app.data.get(key, {})
                     if "options" in obj:
@@ -312,11 +342,12 @@ class ezUI:
                     menu = widget["menu"]
                     menu.delete(0, "end")
                     labels = list(new_options.keys())
-                    for i, label in enumerate(labels):
-                        if not new_options[label]:  # disabled
+                    for i, (label, enabled) in enumerate(new_options.items()):
+                        if not enabled:  # disabled
                             menu.add_command(label=label, state="disabled")
                         else:
                             menu.add_command(label=label, command=lambda v=label: var.set(v))
+                            
                     current_index = obj.get("selected_index", 0)
                     if current_index < len(labels):
                         var.set(labels[current_index])
@@ -505,6 +536,13 @@ class ezUI:
             self.hover_element = None
             self.dropdowns = {}  # Maps dropdown name to (main dropdown element, dropdown frame)
             self.active_dropdown = None  # Currently opened dropdown name or None
+            self.dropdown_guard = False # give dropdowns priority
+            self.just_opened_dropdown = False # delays closing the dropdown
+            self.dropdown_opener_name = None
+            self._close_dropdown_next_frame = False
+            self.modal_clickable_zones = []
+            self.modal_root_name = None
+            self.active_modal_element = None
             self.queue = {} # Stores {"mousebutton", "element", "handler", "zone", "name"} a;;ping fot cross-evertihng mouse up
             self.cursor_pos = 0
             self.insert_mode = False
@@ -601,11 +639,19 @@ class ezUI:
                 if self.user_loop:
                     self.user_loop(self.system(self.app), self.app.data)
                 
-                #slow it down 
-                self.counter += 1
-                if self.counter >= 15:
-                    self.counter = 0
-                    self.draw_ui()
+                self.draw_ui()
+                
+                if self._close_dropdown_next_frame:
+                    dropdown = self.system.get_element_by_name(self.active_dropdown)
+                    if dropdown:
+                        dropdown.attributes["visibility"] = "collapsed"
+                        dropdown.visibility = "collapsed"
+                    self.active_dropdown = None
+                    self._close_dropdown_next_frame = False
+                    self.compute_layout()
+                
+                if self.dropdown_guard:
+                    self.dropdown_guard = False
                     
                 time.sleep(0.01)  # small delay to prevent CPU spinning
                 
@@ -663,25 +709,33 @@ class ezUI:
                     else:
                         key = el.attributes.get("ezBind", "").strip("()")
                         dropdown_data = self.app.data.get(key, {"options": [], "selected_index": 0})
-                        options = dropdown_data.get("options", [])                        
-                        
-                        dropdown_width = 10  # adjust to your estimated dropdown width
-                        dropdown_height = len(options) # estimate for options + padding
+                        options = dropdown_data.get("options", {})
+                        labels = list(options.keys())
+
+                        # Dynamic width based on longest label + 4
+                        max_label_len = max((len(label) for label in labels), default=0)
+                        dropdown_width = max_label_len + 4
+                        dropdown_height = len(labels)
 
                         drop_frame = ezUI.Element("frame", {
                             "name": "{}_dropdown".format(name),
-                            "x": str(dropdown_width * 8),   # upscale to pixel coords
-                            "y": str(dropdown_height * 16),
+                            "x": "0",  # will be repositioned later
+                            "y": "0",
+                            "width": str(dropdown_width * 8),     # pixels
+                            "height": str(dropdown_height * 16),  # pixels
                             "visibility": "collapsed",
+                            "ezModal": "clear",
                             "border": "false",
-                            "overflow": "hidden"
+                            "overflow": "hidden",
+                            "bg": "#cccccc"
                         })
 
                         # Each button sets index and hides dropdown
                         for i, (label, enabled) in enumerate(options.items()):
                             btn = ezUI.Element("button", {
                                 "text": label,
-                                "name": "{}_option_{}".format(name,i)
+                                "name": "{}_option_{}".format(name,i),
+                                "width": str(max_label_len + 4)
                             })
                             
                             def make_handler(index, ui=self):  # ← capture self as ui
@@ -690,7 +744,6 @@ class ezUI:
                                         obj = data.get(key)
                                         if isinstance(obj, dict) and "selected_index" in obj:
                                             obj["selected_index"] = index
-                                            print(index)
                                             data.update(key, obj)
 
                                     dropdown_name = "{}_dropdown".format(name)
@@ -698,13 +751,12 @@ class ezUI:
                                     if dropdown:
                                         dropdown.attributes["visibility"] = "collapsed"
                                         dropdown.visibility = "collapsed"
-
+                                    
                                     ui.active_dropdown = None
+                                    self.dropdown_opener_name = None
                                     ui.compute_layout()
-                                    print("Dropdown visibility after layout:", dropdown.visibility)
                                 return handler
-                                
-                            print(enabled)
+                            
                             if enabled:
                                 self.app.data.bind("{}_option_{}_handler".format(name,i), make_handler(i))
                                 btn.attributes["ezClick"] = "{}_option_{}_handler".format(name,i)
@@ -715,7 +767,8 @@ class ezUI:
                             self.dropdowns[name] = (el, drop_frame)
                             self.app.register_element(drop_frame)
                             self.app.root_element.add_child(drop_frame)
-                            self.elements_flat.append(drop_frame)                            
+                                
+                            #self.elements_flat.append(drop_frame)                            
                             
                 for child in el.children: 
                     make_dropdowns_recursive(child)
@@ -726,6 +779,20 @@ class ezUI:
         def compute_layout(self):
             self.elements_flat = []
             self.layout_map = {}
+
+            def find_modal(root):
+                stack = [root]
+                while stack:
+                    el = stack.pop()
+                    if el.attributes.get("ezModal", "").lower() in ("clear", "opaque") and el.visibility == "visible":
+                        return el
+                    stack.extend(el.children[::-1])
+                return None
+
+            modal_element = find_modal(self.app.root_element)
+            self.active_modal_element = modal_element
+            self.modal_root_name = modal_element.attributes.get("name") if modal_element else None
+            
             el = self.app.root_element
             self.title = el.attributes.get("title", "ezUI")
 
@@ -810,9 +877,12 @@ class ezUI:
                                 new_state = "visible" if current_visibility == "collapsed" else "collapsed"
 
                                 dropdown.attributes["visibility"] = new_state
+                                self.dropdown_opener_name = toggle_element.attributes.get("name")
                                 dropdown.visibility = new_state
                                 self.active_dropdown = dropdown.attributes["name"] if new_state == "visible" else None
-
+                                self.dropdown_guard = (new_state == "visible")
+                                self.just_opened_dropdown = True
+                                
                                 self.compute_layout()
                             return open_dropdown
                             
@@ -824,14 +894,30 @@ class ezUI:
                         labels = list(options.keys())
                         selected_index = dropdown_data.get("selected_index", 0)
                         selected_label = labels[selected_index] if selected_index < len(labels) else ""
-
+                        # Dynamic width based on longest label + 4
+                        max_label_len = max((len(label) for label in labels), default=0)
+                        dropdown_width = max_label_len + 4
+                        
                         self.clickable_zones.append((
                             x, y,
-                            x + len(selected_label) + 4, y,
+                            x + dropdown_width, y,
                             handler, 
                             name,
                             child
-                        ))                      
+                        ))
+                        
+                        dropdown_name = "{}_dropdown".format(name)
+                        
+                        drop_height = len(self.app.data.get(name, {}).get("options", {})) - 1
+                        window_height = self.window_body_height
+
+                        drop_y = y + 1
+                        
+                        if drop_y + drop_height > window_height:
+                            drop_y = max(0, window_height - drop_height)
+
+                        drop_frame.attributes["x"] = str(x * 8)
+                        drop_frame.attributes["y"] = str(drop_y * 16)
                         
                 for child in element.children:                    
                     if child.visibility == "collapsed":
@@ -851,23 +937,34 @@ class ezUI:
                         text = child.attributes.get("text", "")
                         num_lines = text.count("\n") + 1
                         est_height = max(num_lines, int(child.attributes.get("height", num_lines)))
-                    elif tag in ["button", "checkbutton", "radiobutton"]:
+                    elif tag == "button":
+                        text = child.attributes.get("text", "")
+                        text_width = len(text)                        
+                        el_width = int(child.attributes.get("width","10"))
+                        space_len = 0 if el_width == (text_width + 4) else  (el_width - (text_width + 4))
+                        if text_width/2 != math.floor(text_width/2):
+                            space_len +=1
+                        est_width = text_width + space_len + 4
+                    elif tag in ["checkbutton", "radiobutton"]:
                         est_width = text_width + 4
                     elif tag == "optionmenu":
                         key = child.attributes.get("ezBind", "").strip("()")
                         dropdown_data = self.app.data.get(key, {"options": [], "selected_index": 0})
-                        options = dropdown_data.get("options", [])
+                        options = dropdown_data.get("options", {})
                         selected_index = dropdown_data.get("selected_index", 0)
                         labels = list(options.keys())
-                        text = labels[selected_index]
-                        text_width = len(str(text))
-                        est_width = text_width + 4
+
+                        # Dynamic width based on longest label + 4
+                        max_label_len = max((len(label) for label in labels), default=0)
+                        dropdown_width = max_label_len + 4                        
+                        est_width = dropdown_width
+                        child.attributes["width"] = est_width
 
                     width = int(child.attributes.get("width", est_width))
                     height = int(child.attributes.get("height", est_height))                   
                     
                     # --- Handle <frame> ---
-                    if tag == "frame":
+                    if tag == "frame":                        
                         child_width = int(child.attributes.get("width", -1))
                         child_height = int(child.attributes.get("height", -1))
 
@@ -900,6 +997,43 @@ class ezUI:
                         child.x, child.y = layout_x, layout_y
                         child.width, child.height = child_width, child_height
                         layout_recursive(child, layout_x, layout_y)
+                        
+                        self.modal_root_name = None
+                        self.active_modal_element = None
+                        modal_element = None
+                        
+                        modal_type = child.attributes.get("ezModal", "None").lower()
+                        if modal_type in ["clear", "opaque"]:
+                            self.modal_root_name = child.attributes.get("name")
+                            modal_element = child
+                            self.active_modal_element = modal_element
+                            break
+
+                        if modal_element:
+                            # Restrict clickable zones to modal frame + its subtree
+                            allowed = set()
+
+                            def collect_subtree_names(e):
+                                name = e.attributes.get("name")
+                                if name:
+                                    allowed.add(name)
+                                for child in e.children:
+                                    collect_subtree_names(child)
+
+                            collect_subtree_names(modal_element)
+                            
+                            self.elements_flat = [e for e in self.elements_flat if e in allowed_elements]
+                            
+                            if self.focus_element and self.focus_element not in self.elements_flat:
+                                self.focus_element = None
+                                self.focus_index = -1
+
+                            # Filter clickable zones
+                            self.clickable_zones = [z for z in self.clickable_zones if z[5] in allowed]
+
+                            # Filter element coords
+                            self.element_coords = [e for e in self.element_coords if e[4].attributes.get("name") in allowed]
+                            
                         continue
 
                     # --- Normal element layout ---
@@ -951,6 +1085,20 @@ class ezUI:
                     layout_recursive(child, layout_x, layout_y)
                         
             layout_recursive(el, layout_offset_x, layout_offset_y)
+            
+            if self.active_modal_element:
+                allowed = set()
+
+                def collect_modal_subtree(el):
+                    allowed.add(el)
+                    for c in el.children:
+                        collect_modal_subtree(c)
+
+                collect_modal_subtree(self.active_modal_element)
+
+                #self.elements_flat = [e for e in self.elements_flat if e in allowed]
+                self.element_coords = [z for z in self.element_coords if z[4] in allowed]
+                self.clickable_zones = [z for z in self.clickable_zones if z[6] in allowed]
 
         def draw_ui(self):
             self.screen.clear()
@@ -977,15 +1125,13 @@ class ezUI:
             self.canvas.setColorFG(self.fg_color)            
             
             for el in self.elements_flat:
-                if el.visibility in ("hidden", "collapsed"):
-                    print("SKIP DRAW:", el.attributes.get("name"))
+                if el.visibility in ("hidden", "collapsed"):                    
                     continue
 
                 # walk up parents just to be safe
                 parent = el.parent
                 while parent:
                     if parent.visibility in ("hidden", "collapsed"):
-                        print("SKIP CHILD OF COLLAPSED:", el.attributes.get("name"))
                         break
                     parent = parent.parent                    
                 
@@ -1155,10 +1301,24 @@ class ezUI:
                 self.focus_element is not None and
                 element.attributes.get("name") == self.focus_element.attributes.get("name")
             )
+            
+            text_width = len(text)
+            el_width = int(element.attributes.get("width","10"))
+            space_len = 0 if el_width == (text_width + 4) else  (el_width - (text_width + 4))
+            
+            if space_len/2 != math.floor(space_len/2):
+                space_len +=1
+            
+            space1 = " " * math.floor(space_len/2)
+            space2 = space1
 
-            label = "[ {} ]".format(text)
-            width = len(label)
-
+            label = "[ {}{}{} ]".format(space1,text,space2)
+            
+            if (len(label)/2) != math.floor(len(label)):
+                space1 = " " * (math.floor(space_len/2)+1)
+                label = "[ {}{}{} ]".format(space1,text,space2)
+            
+                       
             for i, ch in enumerate(label):
                 if (i == 0 or i == len(label) - 1) and (is_hover or is_focus):
                     # Invert just the brackets on hover
@@ -1243,7 +1403,15 @@ class ezUI:
             options = dropdown_data.get("options", [])
             selected_index = dropdown_data.get("selected_index", 0)
             labels = list(options.keys())
-            full_label = "{} [V]".format(labels[selected_index])
+
+            # Dynamic width based on longest label + 4
+            max_label_len = max((len(label) for label in labels), default=0)
+            dropdown_width = max_label_len
+            text = labels[selected_index]
+            text_len = len(text)
+            space_len = dropdown_width - text_len
+            space = " " * space_len
+            full_label = "{}{} [V]".format(text,space)
             is_hover = self.hover_element == element.attributes.get("name")
             is_focus = (
                 self.focus_element is not None and
@@ -1325,7 +1493,7 @@ class ezUI:
             )
         
         def handle_input(self, key):
-            print(key)            
+            #print(key)            
             prev_index = self.focus_index
             
             if key == 259:  # up arrow → move cursor to beginning                
@@ -1366,7 +1534,6 @@ class ezUI:
             elif key in range(32, 127):  # Printable characters
                 el = self.elements_flat[self.focus_index]                
                 tag = el.tag.lower()
-                print(tag)
                 if tag in ("entry","textbox"):
                     self.update_text(chr(key))
             elif key  == 8: # Backspace key
@@ -1393,7 +1560,7 @@ class ezUI:
                     val = str(self.app.data.get(keyname, ""))
                     self.cursor_pos = len(val)
 
-        def activate_current(self, el, handler=None):           
+        def activate_current(self, el, handler=None):            
             tag = el.tag.lower()
             handler_name = el.attributes.get("ezClick", "")         
             
@@ -1448,9 +1615,112 @@ class ezUI:
                     self.app.data.update(keyname, new)
         
         def handle_mouse(self):
-            if self.mouse_left or self.mouse_right: #right will take precedence
-                # Mouse down: record target zone for potential action
-                for x1, y1, x2, y2, handler, name, el in self.clickable_zones:
+            if self.dropdown_guard:
+                return  # Block input for one frame after dropdown opens
+                
+            # Block clicks outside modal dropdown and auto-close if modal="clear"
+            if self.active_modal_element and self.mouse_left:
+                modal_type = self.active_modal_element.attributes.get("ezModal", "none").lower()
+                if modal_type in ("clear", "opaque"):
+                    # Get modal layout area
+                    bounds = self.layout_map.get(self.active_modal_element)
+                    if bounds:
+                        modal_x, modal_y = bounds
+                        modal_w = self.active_modal_element.width
+                        modal_h = self.active_modal_element.height
+                        inside_modal = (
+                            modal_x <= self.mouse_x < modal_x + modal_w and
+                            modal_y <= self.mouse_y < modal_y + modal_h
+                        )
+                        if not inside_modal:
+                            print("Clicked outside modal — closing dropdown")
+                            self.active_dropdown = None
+                            self.active_modal_element.attributes["visibility"] = "collapsed"
+                            self.active_modal_element.visibility = "collapsed"
+                            self.active_modal_element = None
+                            self.modal_root_name = None
+                            self.queue = None
+                            self.compute_layout()
+                            return  # Block further interaction
+
+            click_happened = self.mouse_left or self.mouse_right
+            mx, my = self.mouse_x, self.mouse_y
+
+            # -----------------------------------------
+            # Dropdown modal logic
+            # -----------------------------------------
+            if self.active_dropdown:
+                dropdown_name = self.active_dropdown
+                dropdown_frame_name = f"{dropdown_name}_dropdown"
+                self.modal_clickable_zones = []
+
+                clicked_inside = False
+
+                # Restrict interaction to dropdown + its options
+                for zone in self.clickable_zones:
+                    x1, y1, x2, y2, handler, name, el = zone
+                    if name == dropdown_name or name.startswith(dropdown_frame_name):
+                        self.modal_clickable_zones.append(zone)
+                        if x1 <= mx <= x2 and y1 == my:
+                            clicked_inside = True
+                            if click_happened:
+                                self.queue = {
+                                    "action": "MouseLeft" if self.mouse_left else "MouseRight",
+                                    "element": el,
+                                    "handler": el.attributes.get("ezClick"),
+                                    "zone": (x1, y1, x2, y2),
+                                    "name": name
+                                }
+                                self._close_dropdown_next_frame = True
+                            break
+
+                # Click outside dropdown — close it
+                if not clicked_inside and click_happened:
+                    dropdown = self.system.get_element_by_name(dropdown_frame_name)
+                    if dropdown:
+                        dropdown.attributes["visibility"] = "collapsed"
+                        dropdown.visibility = "collapsed"
+                    self.active_dropdown = None
+                    self.queue = None
+                    self.compute_layout()
+                return  # Fully block anything outside
+
+            # -----------------------------------------
+            # Normal interaction if no active modal
+            # -----------------------------------------
+            self.modal_clickable_zones = self.clickable_zones
+            
+            # Handle modal outside-click close
+            if self.active_modal_element:
+                mx, my = self.mouse_x, self.mouse_y
+                modal_x, modal_y = self.layout_map.get(self.active_modal_element, (None, None))
+                if modal_x is not None:
+                    modal_w = self.active_modal_element.width
+                    modal_h = self.active_modal_element.height
+
+                    inside_modal = (
+                        modal_x <= mx < modal_x + modal_w and
+                        modal_y <= my < modal_y + modal_h
+                    )
+
+                    if not inside_modal and (self.mouse_left or self.mouse_right):
+                        modal_type = self.active_modal_element.attributes.get("ezModal", "").lower()
+                        if modal_type == "clear" and self.active_dropdown:
+                            # Close dropdown if click is outside
+                            dropdown = self.system.get_element_by_name(self.active_dropdown + "_dropdown")
+                            if dropdown:
+                                dropdown.attributes["visibility"] = "collapsed"
+                                dropdown.visibility = "collapsed"
+                            self.active_dropdown = None
+                            self.active_modal_element = None
+                            self.modal_root_name = None
+                            self.queue = None
+                            self.compute_layout()
+                        return  # Block any further interaction
+
+            if click_happened:                
+                # Mouse down – identify which zone is clicked
+                for x1, y1, x2, y2, handler, name, el in self.modal_clickable_zones:
                     if x1 <= self.mouse_x <= x2 and y1 == self.mouse_y:
                         action = "MouseRight" if self.mouse_right else "MouseLeft"
                         self.queue = {
@@ -1461,63 +1731,67 @@ class ezUI:
                             "name": name
                         }
 
-                        # set focus now for visual feedback
+                        # Visual focus
                         tag = el.tag.lower()
                         if tag in ["button", "checkbutton", "radiobutton", "optionmenu"]:
-                            # Save previous focus index                        
                             self.last_focus_index = self.focus_index
-                            i = None
                             try:
-                                i = self.elements_flat.index(el)
+                                self.focus_index = self.elements_flat.index(el)
                             except ValueError:
-                                i = None  # Element wasn't found, just in case
-                            self.focus_index = i
+                                self.focus_index = None
                             self.focus_element = el
-                        return  # Done processing mouse down
+                        return
             else:
-                # Mouse up: validate against stored press zone
-                # Check clickable zones (e.g. exit button)
+                # Mouse up – finalize any queued interaction
                 if self.queue:
+                    if self.active_dropdown:
+                        # Only allow processing if the queued name is in modal zones
+                        allowed = False
+                        for _, _, _, _, _, name, _ in self.modal_clickable_zones:
+                            if self.queue["name"] == name:
+                                allowed = True
+                                break
+                        if not allowed:
+                            self.queue = None
+                            return
+                            
                     action = self.queue["action"]
                     el = self.queue["element"]
                     handler = self.queue["handler"]
                     x1, y1, x2, y2 = self.queue["zone"]
 
-                    if x1 <= self.mouse_x <= x2 and y1 == self.mouse_y:
-                        if action == "MouseLeft":
-                            tag = el.tag.lower()
-                            if tag in ["button", "checkbutton", "radiobutton", "optionmenu"]:                                
-                                self.activate_current(el, handler)
+                    if x1 <= self.mouse_x <= x2 and y1 == self.mouse_y and action == "MouseLeft":
+                        tag = el.tag.lower()
+                        if tag in ["button", "checkbutton", "radiobutton", "optionmenu"]:
+                            self.activate_current(el, handler)
 
-                    # Clear queue no matter what
-                    self.queue = None            
+                    self.queue = None                    
             
-            # Check widgets
+            # Focus logic for entry clicks
             for i, (x1, y1, x2, y2, el) in reversed(list(enumerate(self.element_coords))):
+                if el not in self.elements_flat:
+                    continue
                 if x1 <= self.mouse_x <= x2 and y1 <= self.mouse_y <= y2:
                     if self.mouse_left:
                         tag = el.tag.lower()
-                        # Save previous focus index                        
                         self.last_focus_index = self.focus_index
-                        self.focus_index = i +1
+                        self.focus_index = i + 1
                         self.focus_element = el
-                            
+
                         if tag == "entry":
                             max_length = int(el.attributes.get("width", 12))
                             keyname = el.attributes.get("ezBind", "").strip("()")
                             val = str(self.app.data.get(keyname, ""))
                             total_len = len(val)
 
-                            if total_len <= max_length:
-                                start = 0
-                            else:
+                            start = 0
+                            if total_len > max_length:
                                 start = max(0, min(self.cursor_pos - max_length + 1, total_len - max_length))
 
                             click_offset = self.mouse_x - x1
                             click_offset = max(0, min(click_offset, max_length - 1))
-                            self.cursor_pos = min(start + click_offset, total_len)                       
-                                                
-                        break
+                            self.cursor_pos = min(start + click_offset, total_len)
+                    break
                 
         def cleanup(self):
             cu.nocbreak()
